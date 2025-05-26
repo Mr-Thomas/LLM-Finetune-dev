@@ -5,3 +5,7 @@
 /._____temp
 /.ipynb_checkpoints
 .DS_Store
+.idea/*
+.idea/misc.xml
+.idea/LLM-Finetune-dev.iml
+.idea/deployment.xml

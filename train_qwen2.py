@@ -3,7 +3,7 @@ import pandas as pd
 import torch
 from datasets import Dataset
 from modelscope import snapshot_download, AutoTokenizer
-from swanlab.integration.huggingface import SwanLabCallback
+from swanlab.integration.transformers import SwanLabCallback
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
     AutoModelForCausalLM,
@@ -18,14 +18,16 @@ import swanlab
 def dataset_jsonl_transfer(origin_path, new_path):
     """
     将原始数据集转换为大模型微调所需数据格式的新数据集
+    :param origin_path: 原始 JSONL 文件路径
+    :param new_path: 转换后的 JSONL 文件路径
     """
     messages = []
 
     # 读取旧的JSONL文件
-    with open(origin_path, "r") as file:
+    with open(origin_path, "r", encoding="utf-8") as file:
         for line in file:
             # 解析每一行的json数据
-            data = json.loads(line)
+            data = json.loads(line.strip())  # 去除首尾空格/换行符
             context = data["text"]
             catagory = data["category"]
             label = data["output"]
@@ -45,6 +47,9 @@ def dataset_jsonl_transfer(origin_path, new_path):
 def process_func(example):
     """
     将数据集进行预处理
+    :param example: 单条数据
+    :param tokenizer: 分词器
+    :return: 处理后的输入 ID、注意力掩码和标签
     """
     MAX_LENGTH = 384
     input_ids, attention_mask, labels = [], [], []
@@ -70,6 +75,13 @@ def process_func(example):
 
 
 def predict(messages, model, tokenizer):
+    """
+    使用模型进行预测
+    :param messages: 输入消息列表
+    :param model: 模型
+    :param tokenizer: 分词器
+    :return: 预测结果
+    """
     device = "cuda"
     text = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
@@ -96,10 +108,10 @@ model_dir = snapshot_download(
 
 # Transformers加载模型权重
 tokenizer = AutoTokenizer.from_pretrained(
-    "./qwen/Qwen2-1___5B-Instruct/", use_fast=False, trust_remote_code=True
+    model_dir, use_fast=False, trust_remote_code=True
 )
 model = AutoModelForCausalLM.from_pretrained(
-    "./qwen/Qwen2-1___5B-Instruct/", device_map="auto", torch_dtype=torch.bfloat16
+    model_dir, device_map="auto", torch_dtype=torch.bfloat16
 )
 model.enable_input_require_grads()  # 开启梯度检查点时，要执行该方法
 
@@ -120,6 +132,7 @@ train_df = pd.read_json(train_jsonl_new_path, lines=True)
 train_ds = Dataset.from_pandas(train_df)
 train_dataset = train_ds.map(process_func, remove_columns=train_ds.column_names)
 
+# LoRA 配置
 config = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
     target_modules=[
@@ -141,6 +154,7 @@ model = get_peft_model(model, config)
 
 args = TrainingArguments(
     output_dir="./output/Qwen1.5",
+    label_names=["input_ids", "attention_mask", "labels"],  # 关键修复
     per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
     logging_steps=10,
@@ -149,10 +163,12 @@ args = TrainingArguments(
     learning_rate=1e-4,
     save_on_each_node=True,
     gradient_checkpointing=True,
-    report_to="none",
+    report_to="swanlab",
 )
 
 swanlab_callback = SwanLabCallback(
+    swanlab_login_choice="2",  # 自动选择已有账号
+    api_key="zmkhLZcM6E7zZ6MVlt20K",  # 从官网获取
     project="Qwen2-fintune",
     experiment_name="Qwen2-1.5B-Instruct",
     description="使用通义千问Qwen2-1.5B-Instruct模型在zh_cls_fudan-news数据集上微调。",
